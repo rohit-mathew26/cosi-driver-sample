@@ -47,6 +47,30 @@ USER_SECRET="rook-ceph-object-user-${OBJECT_STORE}-${OBJECT_USER}"
 
 OUT_CREDS_FILE="${OUT_CREDS_FILE:-${PWD}/s3-credentials.yaml}"
 
+LOOP_DEVICE_OSDS="${LOOP_DEVICE_OSDS:-false}"
+LOOP_DEVICE_BACKING_DIR="${LOOP_DEVICE_BACKING_DIR:-}"
+
+run_as_root() {
+  if (( EUID == 0 )); then
+    "$@"
+  else
+    sudo "$@"
+  fi
+}
+
+ensure_udev_data() {
+  local dev_file
+  local major_minor
+  local data_file
+
+  run_as_root mkdir -p /run/udev/data
+  for dev_file in /sys/class/block/*/dev; do
+    read -r major_minor < "${dev_file}"
+    data_file="/run/udev/data/b${major_minor}"
+    [ -e "${data_file}" ] || run_as_root touch "${data_file}"
+  done
+}
+
 # ---------------------------------------------------------------------------
 # Apply everything up front. CRDs must land first (server-side) so the
 # CephCluster/CephObjectStore/CephObjectStoreUser objects are recognized; the
@@ -60,7 +84,45 @@ echo "==> Applying Rook common/operator/csi-operator + CephCluster + CephObjectS
 kubectl apply -f "${ROOK_RAW_BASE}/common.yaml"
 kubectl apply --server-side -f "${ROOK_RAW_BASE}/csi-operator.yaml"
 kubectl apply -f "${ROOK_RAW_BASE}/operator.yaml"
-kubectl apply -f "${ROOK_RAW_BASE}/cluster-test.yaml"
+
+if [ "${LOOP_DEVICE_OSDS}" = "true" ]; then
+  [ -n "${LOOP_DEVICE_BACKING_DIR}" ] || {
+    echo "LOOP_DEVICE_BACKING_DIR is required when LOOP_DEVICE_OSDS=true" >&2
+    exit 1
+  }
+
+  ensure_udev_data
+  loop_devices=()
+  for disk in "${LOOP_DEVICE_BACKING_DIR}"/ceph-osd-*.img; do
+    loop_device=$(losetup -j "${disk}" | cut -d: -f1)
+    [ -n "${loop_device}" ] || {
+      echo "no loop device found for ${disk}" >&2
+      exit 1
+    }
+    loop_devices+=("${loop_device}")
+  done
+  LOOP_DEVICE_NAMES=$(IFS=,; echo "${loop_devices[*]}")
+
+  kubectl -n "${ROOK_NS}" patch configmap rook-ceph-operator-config \
+    --type merge \
+    -p '{"data":{"ROOK_CEPH_ALLOW_LOOP_DEVICES":"true"}}'
+
+  curl --fail --location --silent "${ROOK_RAW_BASE}/cluster-test.yaml" \
+    | awk -v devices="${LOOP_DEVICE_NAMES}" '
+        /^[[:space:]]+useAllDevices: true$/ {
+          print "    useAllDevices: false"
+          print "    devices:"
+          count = split(devices, names, ",")
+          for (i = 1; i <= count; i++) print "      - name: " names[i]
+          next
+        }
+        { print }
+      ' \
+    | kubectl apply -f -
+else
+  kubectl apply -f "${ROOK_RAW_BASE}/cluster-test.yaml"
+fi
+
 kubectl apply -f "${ROOK_RAW_BASE}/object-test.yaml"
 kubectl apply -f "${ROOK_DIR}/object-user.yaml"
 
