@@ -36,7 +36,7 @@ set -o pipefail
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)
 ROOK_DIR="${SCRIPT_DIR}/rook"
 
-ROOK_VERSION="${ROOK_VERSION:-v1.19.4}"
+ROOK_VERSION="${ROOK_VERSION:-v1.20.6}"
 ROOK_RAW_BASE="https://raw.githubusercontent.com/rook/rook/${ROOK_VERSION}/deploy/examples"
 
 ROOK_NS="rook-ceph"
