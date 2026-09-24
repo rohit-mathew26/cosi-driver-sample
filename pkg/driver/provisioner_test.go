@@ -54,6 +54,40 @@ func (tc provisionerServerTestBase) buildServer() ProvisionerServer {
 }
 
 // ---------------------------------------------------------------------------
+// DriverGenerateBucketId
+// ---------------------------------------------------------------------------
+
+func TestProvisionerServer_GenerateBucketId(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		request          *cosi.DriverGenerateBucketIdRequest
+		expectedResponse *cosi.DriverGenerateBucketIdResponse
+	}{
+		{
+			name:    "returns the suggested name unchanged",
+			request: &cosi.DriverGenerateBucketIdRequest{Name: "obj-bucket-cru1a2b3c"},
+			expectedResponse: &cosi.DriverGenerateBucketIdResponse{
+				BucketId: "obj-bucket-cru1a2b3c",
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// nil DynamicClient: reaching for a backend client panics, which is the assertion
+			// that DriverGenerateBucketId provisions nothing.
+			srv := ProvisionerServer{}
+
+			actual, err := srv.DriverGenerateBucketId(t.Context(), tc.request)
+			require.NoError(t, err)
+			assert.Equal(t, tc.expectedResponse, actual)
+
+			again, err := srv.DriverGenerateBucketId(t.Context(), tc.request)
+			require.NoError(t, err)
+			assert.Equal(t, actual, again)
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
 // DriverCreateBucket
 // ---------------------------------------------------------------------------
 
@@ -63,6 +97,7 @@ func TestProvisionerServer_CreateBucket(t *testing.T) {
 
 		request          *cosi.DriverCreateBucketRequest
 		expectedResponse *cosi.DriverCreateBucketResponse
+		checkStub        func(t *testing.T, stub *stubs3.StubClient)
 	}{
 		// --- protocol validation -----------------------------------------------
 		{
@@ -70,7 +105,7 @@ func TestProvisionerServer_CreateBucket(t *testing.T) {
 				name: "non-S3 protocol returns InvalidArgument",
 			},
 			request: &cosi.DriverCreateBucketRequest{
-				Name:      "test-bucket",
+				BucketId:  "test-bucket",
 				Protocols: []*cosi.ObjectProtocol{{Type: cosi.ObjectProtocol_AZURE}},
 			},
 		},
@@ -79,7 +114,7 @@ func TestProvisionerServer_CreateBucket(t *testing.T) {
 				name: "nil protocols list returns InvalidArgument",
 			},
 			request: &cosi.DriverCreateBucketRequest{
-				Name:      "test-bucket",
+				BucketId:  "test-bucket",
 				Protocols: nil,
 			},
 		},
@@ -90,7 +125,7 @@ func TestProvisionerServer_CreateBucket(t *testing.T) {
 				dynamicClientErr: s3.MissingParameterError{Parameter: "adminSecretName"},
 			},
 			request: &cosi.DriverCreateBucketRequest{
-				Name:      "test-bucket",
+				BucketId:  "test-bucket",
 				Protocols: []*cosi.ObjectProtocol{{Type: cosi.ObjectProtocol_S3}},
 			},
 		},
@@ -100,7 +135,7 @@ func TestProvisionerServer_CreateBucket(t *testing.T) {
 				dynamicClientErr: errGeneric,
 			},
 			request: &cosi.DriverCreateBucketRequest{
-				Name:      "test-bucket",
+				BucketId:  "test-bucket",
 				Protocols: []*cosi.ObjectProtocol{{Type: cosi.ObjectProtocol_S3}},
 			},
 		},
@@ -113,7 +148,7 @@ func TestProvisionerServer_CreateBucket(t *testing.T) {
 				},
 			},
 			request: &cosi.DriverCreateBucketRequest{
-				Name:      "test-bucket",
+				BucketId:  "test-bucket",
 				Protocols: []*cosi.ObjectProtocol{{Type: cosi.ObjectProtocol_S3}},
 			},
 		},
@@ -132,11 +167,10 @@ func TestProvisionerServer_CreateBucket(t *testing.T) {
 				},
 			},
 			request: &cosi.DriverCreateBucketRequest{
-				Name:      "existing-bucket",
+				BucketId:  "existing-bucket",
 				Protocols: []*cosi.ObjectProtocol{{Type: cosi.ObjectProtocol_S3}},
 			},
 			expectedResponse: &cosi.DriverCreateBucketResponse{
-				BucketId: "existing-bucket",
 				Protocols: &cosi.ObjectProtocolAndBucketInfo{
 					S3: &cosi.S3BucketInfo{
 						BucketId: "existing-bucket",
@@ -144,6 +178,9 @@ func TestProvisionerServer_CreateBucket(t *testing.T) {
 						Region:   "us-east-1",
 					},
 				},
+			},
+			checkStub: func(t *testing.T, stub *stubs3.StubClient) {
+				assert.Len(t, stub.Buckets, 1, "an existing bucket_id must not create a second bucket")
 			},
 		},
 		// --- new bucket created successfully ----------------------------------
@@ -153,16 +190,26 @@ func TestProvisionerServer_CreateBucket(t *testing.T) {
 				dynamicClient: &stubs3.StubClient{},
 			},
 			request: &cosi.DriverCreateBucketRequest{
-				Name:      "new-bucket",
+				BucketId:  "new-bucket",
 				Protocols: []*cosi.ObjectProtocol{{Type: cosi.ObjectProtocol_S3}},
 			},
 			expectedResponse: &cosi.DriverCreateBucketResponse{
-				BucketId: "new-bucket",
 				Protocols: &cosi.ObjectProtocolAndBucketInfo{
 					S3: &cosi.S3BucketInfo{
 						BucketId: "new-bucket",
 					},
 				},
+			},
+		},
+		// --- bucket_id validation --------------------------------------------
+		{
+			provisionerServerTestBase: provisionerServerTestBase{
+				name:          "empty bucket_id returns InvalidArgument",
+				dynamicClient: &stubs3.StubClient{},
+			},
+			request: &cosi.DriverCreateBucketRequest{
+				BucketId:  "",
+				Protocols: []*cosi.ObjectProtocol{{Type: cosi.ObjectProtocol_S3}},
 			},
 		},
 		// --- CreateBucket errors ----------------------------------------------
@@ -174,7 +221,7 @@ func TestProvisionerServer_CreateBucket(t *testing.T) {
 				},
 			},
 			request: &cosi.DriverCreateBucketRequest{
-				Name:      "new-bucket",
+				BucketId:  "new-bucket",
 				Protocols: []*cosi.ObjectProtocol{{Type: cosi.ObjectProtocol_S3}},
 			},
 		},
@@ -186,7 +233,7 @@ func TestProvisionerServer_CreateBucket(t *testing.T) {
 				},
 			},
 			request: &cosi.DriverCreateBucketRequest{
-				Name:      "new-bucket",
+				BucketId:  "new-bucket",
 				Protocols: []*cosi.ObjectProtocol{{Type: cosi.ObjectProtocol_S3}},
 			},
 		},
@@ -198,12 +245,17 @@ func TestProvisionerServer_CreateBucket(t *testing.T) {
 			if tc.expectedResponse != nil {
 				require.NoError(t, err)
 				require.NotNil(t, actual)
-				assert.Equal(t, tc.expectedResponse.BucketId, actual.BucketId)
 				require.NotNil(t, actual.Protocols)
 				require.NotNil(t, actual.Protocols.S3)
 				assert.Equal(t, tc.expectedResponse.Protocols.S3.BucketId, actual.Protocols.S3.BucketId)
 				assert.Equal(t, tc.expectedResponse.Protocols.S3.Endpoint, actual.Protocols.S3.Endpoint)
 				assert.Equal(t, tc.expectedResponse.Protocols.S3.Region, actual.Protocols.S3.Region)
+
+				if tc.checkStub != nil {
+					stub, ok := tc.dynamicClient.(*stubs3.StubClient)
+					require.True(t, ok, "checkStub requires a *stubs3.StubClient")
+					tc.checkStub(t, stub)
+				}
 
 				return
 			}

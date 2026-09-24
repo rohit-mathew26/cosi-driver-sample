@@ -36,14 +36,34 @@ type ProvisionerServer struct {
 	DynamicClient func(ctx context.Context, params map[string]string) (s3.DynamicClient, error)
 }
 
+// DriverGenerateBucketId returns the backend bucket ID for the suggested name.
+//
+// The name is returned verbatim because this driver's DriverCreateBucket used it directly as the
+// backend bucket name before DriverGenerateBucketId existed. Preserving that derivation keeps
+// buckets created by the older driver reachable under the ID COSI records.
+func (s *ProvisionerServer) DriverGenerateBucketId(
+	_ context.Context,
+	req *cosi.DriverGenerateBucketIdRequest,
+) (*cosi.DriverGenerateBucketIdResponse, error) {
+	return &cosi.DriverGenerateBucketIdResponse{
+		BucketId: req.GetName(),
+	}, nil
+}
+
 // DriverCreateBucket creates a bucket if it does not already exist.
 // If the bucket exists and the parameters match, it returns success without error.
 // If the bucket exists but the parameters differ, it returns a conflict error.
+//
+// bucket_id doubles as the backend bucket name, an invariant DriverDeleteBucket and
+// DriverGrantBucketAccess also rely on: each passes a bucket_id straight to the S3 client.
 func (s *ProvisionerServer) DriverCreateBucket(
 	ctx context.Context,
 	req *cosi.DriverCreateBucketRequest,
 ) (*cosi.DriverCreateBucketResponse, error) {
-	bucketName := req.GetName()
+	bucketName := req.GetBucketId()
+	if bucketName == "" {
+		return nil, status.Error(codes.InvalidArgument, "Missing required bucket_id in request")
+	}
 	parameters := req.GetParameters()
 
 	if !slices.ContainsFunc(
@@ -87,10 +107,9 @@ func (s *ProvisionerServer) DriverCreateBucket(
 
 	klog.InfoS("Bucket successfully created", "bucket", bucketName)
 	return &cosi.DriverCreateBucketResponse{
-		BucketId: bucketInfo.BucketName,
 		Protocols: &cosi.ObjectProtocolAndBucketInfo{
 			S3: &cosi.S3BucketInfo{
-				BucketId: bucketInfo.BucketName,
+				BucketId: bucketName,
 				Endpoint: bucketInfo.Endpoint,
 				Region:   bucketInfo.Region,
 				AddressingStyle: &cosi.S3AddressingStyle{
