@@ -70,3 +70,5 @@ require (
 	sigs.k8s.io/structured-merge-diff/v6 v6.3.0 // indirect
 	sigs.k8s.io/yaml v1.6.0 // indirect
 )
+
+replace sigs.k8s.io/container-object-storage-interface/proto => github.com/rohit-mathew26/container-object-storage-interface/proto v0.0.0-20261007022311-4558f29ab8f8
